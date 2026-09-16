@@ -1,0 +1,14 @@
+{"word": "Haus", "pos": "noun", "lang_code": "de", "tags": ["neuter"], "sounds": [{"ipa": "/haʊ̯s/"}], "senses": [{"glosses": ["house", "building", "home", "dwelling"]}], "forms": [{"form": "Häuser", "tags": ["nominative", "plural"]}, {"form": "Häusern", "tags": ["dative", "plural"]}, {"form": "Hauses", "tags": ["genitive", "singular"]}, {"form": "-", "tags": ["dummy"]}, {"form": "Haus", "tags": ["nominative", "singular"]}]}
+{"word": "See", "pos": "noun", "lang_code": "de", "tags": ["masculine"], "sounds": [{"ipa": "/zeː/"}], "senses": [{"glosses": ["lake"]}], "forms": [{"form": "Seen", "tags": ["plural"]}]}
+{"word": "See", "pos": "noun", "lang_code": "de", "tags": ["feminine"], "sounds": [{"ipa": "/zeː/"}], "senses": [{"glosses": ["sea"]}], "forms": [{"form": "Seen", "tags": ["plural"]}]}
+{"word": "anrufen", "pos": "verb", "lang_code": "de", "sounds": [{"ipa": "/ˈanˌʁuːfn̩/"}], "senses": [{"glosses": ["to call, phone", "to appeal to"]}], "forms": [{"form": "ruft an", "tags": ["present", "third-person", "singular"]}, {"form": "rief an", "tags": ["past", "third-person", "singular"]}, {"form": "angerufen", "tags": ["past", "participle"]}, {"form": "anrufend", "tags": ["present", "participle"]}]}
+{"word": "schnell", "pos": "adj", "lang_code": "de", "sounds": [{"ipa": "/ʃnɛl/"}], "senses": [{"glosses": ["fast, quick"]}], "forms": [{"form": "schneller", "tags": ["comparative"]}, {"form": "schnellste", "tags": ["superlative"]}]}
+{"word": "Berlin", "pos": "name", "lang_code": "de", "tags": ["neuter"], "senses": [{"glosses": ["Berlin (capital of Germany)"]}], "forms": []}
+{"word": "mit", "pos": "prep", "lang_code": "de", "senses": [{"glosses": ["with"]}], "forms": []}
+{"word": "Milch", "pos": "noun", "lang_code": "de", "tags": ["feminine", "no-plural"], "sounds": [{"ipa": "/mɪlç/"}], "senses": [{"glosses": ["milk"]}], "forms": []}
+{"word": "house", "pos": "noun", "lang_code": "en", "senses": [{"glosses": ["a house"]}]}
+{"word": "Haeuser", "lang_code": "de", "redirect": "Häuser"}
+{"word": "", "pos": "noun", "lang_code": "de"}
+{"pos": "noun", "lang_code": "de"}
+{"word": "test", "pos": "", "lang_code": "de"}
+{"word": "cat", "pos": "noun", "lang_code": "en", "tags": 12345}

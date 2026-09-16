@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wortlaut"
+dynamic = ["version"]
+description = "Wortlaut: a standalone German vocabulary and flashcard learning application"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.141.1",
+    "fsrs==6.3.2",
+    "genanki==0.13.1",
+    "piper-tts==1.6.0",
+    "spacy>=3.8.0,<3.9.0",
+    "uvicorn==0.52.4",
+    "de-core-news-md @ https://github.com/explosion/spacy-models/releases/download/de_core_news_md-3.8.0/de_core_news_md-3.8.0-py3-none-any.whl",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.10.0",
+    "pytest>=8.0.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+wortlaut = "app.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "app.version.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["app", "app.*"]
+
+[tool.setuptools.package-data]
+app = ["frontend/index.html", "frontend/assets/*"]
+
+[tool.mypy]
+strict = true
+explicit_package_bases = true
+mypy_path = "."
+exclude = [
+    "^\\.venv",
+    "^\\.pytest_cache",
+    "^\\.mypy_cache",
+    "^\\.ruff_cache",
+    "^build",
+    "^dist",
+    "^handoff",
+    "^tmp",
+]
+
+[[tool.mypy.overrides]]
+module = ["genanki"]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = [
+    ".venv",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "build",
+    "dist",
+    "handoff",
+    "tmp",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/test_build_dict_stage*.py" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+norecursedirs = [".venv", "handoff", "build", "dist", "tmp"]

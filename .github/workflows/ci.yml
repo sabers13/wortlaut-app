@@ -1,0 +1,108 @@
+# Minimal Wortlaut CI: backend gate plus frontend unit/typecheck/build.
+#
+# Browser E2E (Playwright) is expensive and runs only on manual dispatch.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: backend gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install native pronunciation system library
+        run: sudo apt-get update && sudo apt-get install -y libespeak-ng1
+
+      - name: Install the package with dev extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run the authoritative gate
+        run: make gate
+
+  frontend:
+    name: frontend unit, typecheck, and build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run frontend unit tests
+        working-directory: frontend
+        run: npm test
+
+      - name: Run frontend typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Run frontend production build
+        working-directory: frontend
+        run: npm run build
+
+  e2e:
+    name: browser E2E (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install native pronunciation system library
+        run: sudo apt-get update && sudo apt-get install -y libespeak-ng1
+
+      - name: Install the package with dev extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser E2E specs with isolated server state
+        working-directory: frontend
+        run: |
+          npx playwright test tests/e2e/dictionary-modes.spec.ts --workers=1
+          npx playwright test tests/e2e/folders.spec.ts --workers=1
+          npx playwright test tests/e2e/management.spec.ts --workers=1
+          npx playwright test tests/e2e/product.spec.ts --workers=1
+          npx playwright test tests/e2e/study-extra-info.spec.ts --workers=1

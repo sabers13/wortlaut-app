@@ -1,0 +1,9 @@
+{
+  "version": "v2",
+  "filename": "dictionary.sqlite",
+  "sha256": "1698b9979099098bf8d6e6fd7f9194134a927d428e3c2b1905a626eb8ee67d4c",
+  "bytes": 945418240,
+  "classification": "source-backed-stage02-plus-stage04-canary",
+  "attribution": "ATTRIBUTION-v2.md",
+  "download_url": "https://github.com/sabers13/wortlaut-app/releases/download/dictionary-v2/dictionary-v2.sqlite"
+}

@@ -1,0 +1,344 @@
+# MODULES — canonical machine-readable module map.
+#
+# Parsed by tools/check_modules.py and tools/affected_tests.py using the
+# Python 3.12 stdlib tomllib. Adding/removing a row, an owned_paths entry,
+# or a dependency here is a governance-shaped change: the validator runs in
+# the authoritative `make gate` and fails closed on any inconsistency.
+#
+# Schema (per module):
+#   id              string  unique module identifier (must match table key)
+#   owned_paths     list    glob patterns (forward-slash paths, relative to
+#                           repo root). Every tracked plus nonignored-
+#                           untracked source file under the configured
+#                           inventory roots (app, tools, frontend/src,
+#                           reference, plus Dockerfile) MUST resolve to
+#                           exactly one module.
+#   dependencies    list    module ids this module directly depends on
+#                           (imports/uses). The resolver walks the reverse
+#                           closure transitively: changing a dependency
+#                           re-triggers this module's focused tests.
+#   focused_tests   list    pytest-style test paths (forward-slash, relative
+#                           to repo root). May be shared across modules.
+#   focused_commands list  optional non-pytest focused commands (npm
+#                           scripts, frontend typecheck/build, etc.).
+#   agents_rules    list    optional AGENTS R-rule identifiers this module
+#                           path materially exercises (for review indexing,
+#                           not enforcement — see tools/check_agents.py).
+#   adrs            list    optional ADR numbers this module implements.
+
+[modules.runtime_api]
+id = "runtime_api"
+owned_paths = [
+    "app/api.py",
+    "app/__init__.py",
+]
+dependencies = [
+    "audio",
+    "deck",
+    "dictionary",
+    "examples",
+    "export",
+    "render",
+    "resolve",
+    "selection",
+]
+focused_tests = [
+    "tests/test_api.py",
+    "tests/test_capture.py",
+    "tests/test_smoke_baseline.py",
+]
+agents_rules = ["R12", "R13"]
+adrs = ["0001", "0002"]
+
+[modules.resolve]
+id = "resolve"
+owned_paths = ["app/resolve.py"]
+dependencies = []
+focused_tests = [
+    "tests/test_resolve.py",
+    "tests/test_resolve_spacy.py",
+]
+agents_rules = []
+adrs = ["0001"]
+
+[modules.dictionary]
+id = "dictionary"
+owned_paths = ["app/dictionary.py"]
+dependencies = ["resolve"]
+focused_tests = ["tests/test_dictionary.py"]
+agents_rules = []
+adrs = ["0001", "0004"]
+
+[modules.render]
+id = "render"
+owned_paths = ["app/render.py"]
+dependencies = ["dictionary", "selection"]
+focused_tests = ["tests/test_render.py"]
+agents_rules = []
+adrs = ["0001", "0004"]
+
+[modules.examples]
+id = "examples"
+owned_paths = ["app/examples.py"]
+dependencies = []
+focused_tests = ["tests/test_examples.py"]
+agents_rules = []
+adrs = ["0002"]
+
+[modules.audio]
+id = "audio"
+owned_paths = ["app/audio.py"]
+dependencies = []
+focused_tests = ["tests/test_audio.py"]
+agents_rules = []
+adrs = ["0005"]
+
+[modules.deck]
+id = "deck"
+owned_paths = ["app/deck.py"]
+dependencies = ["dictionary", "reference", "selection"]
+focused_tests = ["tests/test_deck.py"]
+agents_rules = ["R6", "R13"]
+adrs = ["0001", "0003", "0004"]
+
+[modules.selection]
+id = "selection"
+owned_paths = ["app/selection.py"]
+dependencies = []
+focused_tests = [
+    "tests/test_selection_policy.py",
+    "tests/test_lookup_performance.py",
+]
+agents_rules = []
+adrs = ["0001", "0004"]
+
+[modules.export]
+id = "export"
+owned_paths = ["app/export.py"]
+dependencies = ["render"]
+focused_tests = ["tests/test_export.py"]
+agents_rules = ["R10"]
+adrs = ["0001"]
+
+[modules.reference]
+id = "reference"
+owned_paths = [
+    "reference/schema.sql",
+    "reference/smoke_test.py",
+]
+dependencies = []
+focused_tests = ["tests/test_smoke_baseline.py"]
+agents_rules = ["R6", "R9"]
+adrs = ["0001", "0004"]
+
+[modules.build_dict]
+id = "build_dict"
+owned_paths = ["tools/build_dict.py"]
+dependencies = ["resolve", "check_agents"]
+focused_tests = [
+    "tests/test_build_dict_stage01.py",
+    "tests/test_build_dict_stage02.py",
+    "tests/test_build_dict_stage03.py",
+    "tests/test_build_dict_stage04.py",
+    "tests/test_build_dict_stage05.py",
+]
+agents_rules = ["R2", "R3"]
+adrs = ["0004", "0006"]
+
+[modules.gate2]
+id = "gate2"
+owned_paths = ["tools/gate2_coverage.py"]
+dependencies = ["dictionary", "resolve"]
+focused_tests = ["tests/test_gate2_coverage.py"]
+agents_rules = []
+adrs = ["0004"]
+
+[modules.check_agents]
+id = "check_agents"
+owned_paths = [
+    "tools/check_agents.py",
+    "tools/resolver_hash.py",
+]
+dependencies = ["reference"]
+focused_tests = ["tests/test_check_agents.py"]
+agents_rules = ["R1", "R3", "R6", "R7", "R12", "R13"]
+adrs = ["0001", "0002", "0004"]
+
+[modules.container]
+id = "container"
+owned_paths = ["Dockerfile"]
+dependencies = []
+focused_tests = ["tests/test_container.py"]
+agents_rules = ["R8"]
+adrs = ["0002"]
+focused_commands = []
+
+[modules.frontend_api]
+id = "frontend_api"
+owned_paths = [
+    "frontend/src/api/client.ts",
+    "frontend/src/api/types.ts",
+    "frontend/src/api/errors.ts",
+    "frontend/src/api/index.ts",
+    "frontend/src/api/client.test.ts",
+]
+dependencies = []
+focused_tests = ["frontend/src/api/client.test.ts"]
+focused_commands = [
+    "npm test --prefix frontend",
+    "npm run --prefix frontend typecheck",
+]
+agents_rules = ["R12", "R13"]
+adrs = ["0002", "0004"]
+
+[modules.frontend_shell]
+id = "frontend_shell"
+owned_paths = [
+    "frontend/src/app.ts",
+    "frontend/src/main.ts",
+    "frontend/src/styles/tokens.css",
+    "frontend/src/study/extra-info-preference.ts",
+    "frontend/src/study/extra-info-preference.test.ts",
+    "frontend/src/utils/candidate-helpers.ts",
+    "frontend/src/utils/candidate-helpers.test.ts",
+]
+dependencies = ["frontend_api"]
+focused_tests = [
+    "frontend/src/study/extra-info-preference.test.ts",
+    "frontend/src/utils/candidate-helpers.test.ts",
+    "frontend/tests/e2e/product.spec.ts",
+    "frontend/tests/e2e/study-extra-info.spec.ts",
+]
+focused_commands = [
+    "npm test --prefix frontend",
+    "npm run --prefix frontend test:e2e",
+    "npm run --prefix frontend typecheck",
+    "npm run --prefix frontend build",
+]
+agents_rules = ["R12"]
+adrs = ["0002"]
+
+[modules.module_metadata]
+id = "module_metadata"
+owned_paths = [
+    "MODULES.toml",
+    "tools/check_modules.py",
+    "tools/affected_tests.py",
+]
+dependencies = []
+focused_tests = [
+    "tests/test_check_modules.py",
+    "tests/test_affected_tests.py",
+]
+focused_commands = ["make check-modules"]
+agents_rules = []
+adrs = []
+
+[modules.standalone]
+id = "standalone"
+owned_paths = [
+    "app/cli.py",
+    "app/standalone.py",
+    "app/version.py",
+    "flashcard",
+    "wortlaut",
+    "release/dictionary-manifest-v1.json",
+    "release/ATTRIBUTION.md",
+    "release/README.md",
+    "app/frontend/**",
+]
+dependencies = ["runtime_api", "dictionary", "provider", "dictionary_mode"]
+focused_tests = [
+    "tests/test_standalone.py",
+    "tests/test_launcher.py",
+    "tests/test_launcher_smoke.py",
+    "tests/test_release_metadata.py",
+    "tests/test_slice12_settings.py",
+]
+focused_commands = ["python -m app.standalone --help"]
+agents_rules = ["R8", "R9", "R12"]
+adrs = ["0001", "0002", "0009"]
+
+[modules.dict_install]
+id = "dict_install"
+owned_paths = ["app/dict_install.py"]
+dependencies = ["dictionary"]
+focused_tests = ["tests/test_dict_install.py"]
+agents_rules = ["R9"]
+adrs = ["0001", "0004"]
+
+[modules.dictionary_mode]
+id = "dictionary_mode"
+owned_paths = [
+    "app/dictionary_mode.py",
+    "app/dictionary_session.py",
+]
+dependencies = ["provider", "selection"]
+focused_tests = [
+    "tests/test_slice12_settings.py",
+]
+agents_rules = ["R2", "R13"]
+adrs = ["0009"]
+
+[modules.provider]
+id = "provider"
+owned_paths = [
+    "app/provider.py",
+    "app/provider_local.py",
+    "app/provider_online.py",
+    "app/routing.py",
+]
+dependencies = ["dictionary", "resolve"]
+focused_tests = [
+    "tests/test_provider_differential.py",
+    "tests/test_routing_equivalence.py",
+]
+agents_rules = ["R2", "R13"]
+adrs = ["0009"]
+
+[modules.online_manifest]
+id = "online_manifest"
+owned_paths = [
+    "app/online_manifest.py",
+    "app/online_filter.py",
+]
+dependencies = []
+focused_tests = [
+    "tests/test_online_manifest.py",
+    "tests/test_routing_equivalence.py",
+]
+agents_rules = ["R13"]
+adrs = ["0009"]
+
+[modules.online_cache]
+id = "online_cache"
+owned_paths = [
+    "app/online_cache.py",
+    "app/online_transport.py",
+]
+dependencies = ["online_manifest"]
+focused_tests = [
+    "tests/test_online_cache.py",
+    "tests/test_provider_differential.py",
+    "tests/test_online_transport.py",
+]
+agents_rules = ["R13"]
+adrs = ["0009"]
+
+[modules.build_online_dictionary]
+id = "build_online_dictionary"
+owned_paths = [
+    "tools/build_online_dictionary.py",
+    "tools/verify_online_dictionary_release.py",
+]
+dependencies = [
+    "dictionary",
+    "online_manifest",
+    "online_cache",
+    "provider",
+]
+focused_tests = [
+    "tests/test_build_online_dictionary.py",
+]
+agents_rules = ["R2", "R3", "R13"]
+adrs = ["0009"]

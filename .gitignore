@@ -1,0 +1,69 @@
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Testing and coverage caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Type checker and linter caches
+.mypy_cache/
+.ruff_cache/
+
+# Build and distribution artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Process and workflow handoff artifacts (see PROMPTS.md / ADRs)
+handoff/
+
+# Environment and secrets (never commit or push)
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.token
+
+# Local runtime databases and user data (AGENTS R9)
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Model and downloader caches
+.cache/
+models/
+downloads/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Temporary scratch and evidence
+tmp/
+
+# Frontend dependencies and generated output
+node_modules/
+frontend/test-results/
+frontend/playwright-report/
+frontend/.playwright/
+# Tracked production frontend assets live under app/frontend/ as
+# release runtime deliverables (Repair F, option A: tracked assets).
+# They are rebuilt by the documented install path's locked frontend
+# build; the build is deterministic (content-hash filenames are stable
+# for unchanged source), so a second rebuild does not dirty the tree.

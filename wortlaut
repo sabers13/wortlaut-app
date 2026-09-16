@@ -1,0 +1,762 @@
+#!/usr/bin/env python3
+"""Single-command standalone launcher for Wortlaut.
+
+Run from the repository root:
+
+    ./wortlaut
+
+The launcher automatically re-executes itself through the
+repository-local ``.venv/bin/python`` interpreter when one is present so
+the user never has to ``source .venv/bin/activate`` first. It resolves
+per-user data paths (XDG on Linux), ensures the user database exists,
+verifies the read-only dictionary asset matches the active manifest,
+and starts the FastAPI app bound to ``127.0.0.1`` only — the port is
+configurable but the loopback bind is non-overridable (AGENTS R8 /
+R12). The loopback URL is printed on stdout and the system browser is
+opened when possible.
+
+No environment variables are required, advanced overrides are exposed
+as optional flags only, and the launcher never modifies or deletes the
+dictionary asset (AGENTS R9). No LLM SDK is installed (AGENTS R1) and
+no arbitrary Python packages are installed behind the user's back.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import webbrowser
+from collections.abc import Sequence
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from app.dict_install import DictionaryManifest
+
+REPO_ROOT = Path(__file__).resolve().parent
+VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
+# A diagnostic marker retained across re-exec.  It is never used as interpreter
+# identity: users can set environment variables, but they must not be able to
+# bypass the repository-venv requirement that way.
+_REEXEC_ENV = "FLASHCARD_LAUNCHER_REEXEC"
+
+
+def _reexec_into_venv() -> "object | int":
+    """Re-execute this script under ``.venv/bin/python`` when available.
+
+    Returns ``None`` to signal that the caller should continue under the
+    current interpreter; never raises. When ``.venv/bin/python`` is
+    absent the script continues under the current interpreter (system
+    Python) so the rest of ``main`` can produce a clear error message
+    telling the user exactly which command to run first.
+
+    Detection of "already in the repository venv" compares the active
+    ``sys.prefix`` with the actual repository ``.venv`` prefix.  Checking
+    merely whether *some* venv is active would let an unrelated environment
+    bypass the project's pinned interpreter.
+    """
+    if not VENV_PYTHON.is_file():
+        return None  # No venv yet; let ``main`` produce the setup hint.
+    if Path(sys.prefix).resolve() == VENV_PYTHON.parent.parent.resolve():
+        return None  # Already running under the venv interpreter.
+    env = dict(os.environ)
+    env[_REEXEC_ENV] = "1"
+    os.execve(
+        str(VENV_PYTHON),
+        [str(VENV_PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]],
+        env,
+    )
+    return None  # pragma: no cover - execve does not return on success
+
+
+def _log(message: str) -> None:
+    """Write a single line to stdout, flushing immediately.
+
+    The launcher is a long-lived process and its progress messages
+    must reach the operator's terminal even when stdout is a pipe.
+    """
+    sys.stdout.write(message + "\n")
+    sys.stdout.flush()
+
+
+class _ApplicationVersionAction(argparse.Action):
+    """Print ``wortlaut <application version>`` and exit.
+
+    Behaves like argparse's stock ``version`` action, but resolves the
+    single application-version authority (:mod:`app.version`) only when
+    ``--version`` is actually requested, so ``--help`` and every other
+    flag keep working without importing the application package first.
+    No version string is hard-coded here.
+    """
+
+    def __init__(
+        self,
+        option_strings: Sequence[str],
+        dest: str = argparse.SUPPRESS,
+        help: str | None = None,
+    ) -> None:
+        super().__init__(
+            option_strings=option_strings, dest=dest, nargs=0, help=help
+        )
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[Any] | None,
+        option_string: str | None = None,
+    ) -> None:
+        from app.version import __version__  # noqa: PLC0415
+
+        formatter = parser._get_formatter()
+        formatter.add_text(f"wortlaut {__version__}")
+        parser._print_message(formatter.format_help(), sys.stdout)
+        parser.exit()
+
+
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="wortlaut",
+        description=(
+            "Run the Wortlaut standalone web app on the loopback interface."
+        ),
+    )
+    parser.add_argument(
+        "--version",
+        action=_ApplicationVersionAction,
+        help="Print the Wortlaut application version and exit.",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="Override the per-user data directory (defaults to XDG_DATA_HOME or "
+        "$HOME/.local/share/flashcard).",
+    )
+    parser.add_argument(
+        "--dict-path",
+        type=Path,
+        default=None,
+        help="Override the path to the read-only dictionary asset.",
+    )
+    parser.add_argument(
+        "--user-db",
+        type=Path,
+        default=None,
+        help="Override the path to the user SQLite database.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="TCP port to bind to on 127.0.0.1 (default 8000).",
+    )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not open the system browser after the server is ready.",
+    )
+    parser.add_argument(
+        "--install-dictionary",
+        action="store_true",
+        help="Install the verified dictionary into the default slot "
+        "(<data-dir>/dictionary/dictionary.sqlite) before starting the server.",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=None,
+        help="Path to the Offline release manifest (defaults to "
+        "release/dictionary-manifest-v2.json). Offline Developer/Recovery "
+        "use only.",
+    )
+    parser.add_argument(
+        "--dictionary-mode",
+        choices=("offline", "online"),
+        default=None,
+        help="Session-scoped dictionary mode (Slice 12 / ADR-0009). "
+        "When omitted, default auto-selection prefers a valid full "
+        "canonical Offline dictionary; otherwise the runtime chooser is shown.",
+    )
+    parser.add_argument(
+        "--setup-voice",
+        action="store_true",
+        help="Download and verify the pinned Piper voice model for native offline TTS, then exit.",
+    )
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    if raw_argv and raw_argv[0] == "setup-voice":
+        raw_argv = ["--setup-voice", *raw_argv[1:]]
+    return parser.parse_args(raw_argv)
+
+
+def _require_venv() -> None:
+    """Fail closed when no repository-local venv is present."""
+    if not VENV_PYTHON.is_file():
+        sys.stderr.write(
+            "wortlaut: repository virtualenv is missing at "
+            f"{VENV_PYTHON}\n"
+            "  Create and install it first:\n"
+            "      python3 -m venv .venv\n"
+            "      .venv/bin/pip install -e .\n"
+        )
+        raise SystemExit(1)
+
+
+def _maybe_install(
+    install: bool,
+    *,
+    manifest: "DictionaryManifest",
+    target_dir: Path,
+) -> Path | None:
+    """Install the manifest's dictionary into ``target_dir`` when requested.
+
+    Returns the installed/verified path on success so ``main`` can skip an
+    immediately-redundant release-identity re-check of the exact same file
+    in the same process (``install_dictionary`` already performed full
+    identity + quick_check + PART-A validation on it). Returns ``None`` when
+    installation was not requested. This is a plain local return value, not
+    a persisted trust marker: it only exists for the remainder of this
+    ``main`` call and is only honoured by the caller when it names the exact
+    canonical path being started.
+    """
+    if not install:
+        return None
+    from app.dict_install import (  # noqa: PLC0415
+        DictionaryInstallerError,
+        install_dictionary,
+    )
+    try:
+        return install_dictionary(manifest, target_dir=target_dir)
+    except DictionaryInstallerError as exc:
+        sys.stderr.write(f"dictionary install failed: {exc}\n")
+        raise SystemExit(3) from exc
+
+
+def _load_active_manifest(manifest_path: Path) -> "DictionaryManifest":
+    """Load the release manifest used for canonical installation/startup."""
+    from app.dict_install import DictionaryInstallerError, load_manifest  # noqa: PLC0415
+
+    try:
+        return load_manifest(manifest_path)
+    except DictionaryInstallerError as exc:
+        sys.stderr.write(f"manifest error: {exc}\n")
+        raise SystemExit(2) from exc
+
+
+def _verify_canonical_dictionary(*, dictionary_path: Path, manifest: "DictionaryManifest") -> None:
+    """Require the canonical asset to match the selected release manifest.
+
+    This performs the lightweight release-identity precheck only — exact
+    manifest filename, exact byte size, exact streaming SHA-256 — before any
+    user database write. It deliberately does NOT run ``PRAGMA quick_check``
+    or the full PART-A schema validation: that full validation happens once,
+    in ``DictionaryRuntime``, when the application activates the asset.
+    Running it here too would stream and validate the same ~945 MB file
+    twice on every ordinary startup.
+    """
+    from app.dict_install import (  # noqa: PLC0415
+        DictionaryInstallerError,
+        verify_dictionary_identity,
+    )
+    expected_path = dictionary_path.parent / manifest.filename
+    if dictionary_path != expected_path:
+        sys.stderr.write(
+            "dictionary manifest filename does not match the canonical path: "
+            f"manifest requires {expected_path}, launcher resolves {dictionary_path}\n"
+        )
+        raise SystemExit(2)
+    if not dictionary_path.is_file():
+        sys.stderr.write(
+            f"dictionary asset is missing: {dictionary_path}\n"
+            "  Place a verified dictionary at that path, or run\n"
+            "  with --install-dictionary to fetch it from the release manifest.\n"
+        )
+        raise SystemExit(1)
+    try:
+        verify_dictionary_identity(
+            dictionary_path,
+            expected_sha256=manifest.sha256,
+            expected_bytes=manifest.bytes,
+        )
+    except DictionaryInstallerError as exc:
+        sys.stderr.write(f"dictionary verification failed: {exc}\n")
+        raise SystemExit(2) from exc
+
+
+def _reject_online_conflicts(args: argparse.Namespace) -> None:
+    """Exit 2 BEFORE any network, provider, install, or PART-B mutation.
+
+    The contradictory CLI combinations named in ADR-0009 are:
+
+    * ``--dictionary-mode online --manifest CUSTOM``
+    * ``--dictionary-mode online --dict-path PATH``
+    * ``--dictionary-mode online --install-dictionary``
+    """
+    if args.dictionary_mode != "online":
+        return
+    reasons = []
+    if args.manifest is not None:
+        reasons.append("--manifest")
+    if args.dict_path is not None:
+        reasons.append("--dict-path")
+    if args.install_dictionary:
+        reasons.append("--install-dictionary")
+    if reasons:
+        joined = ", ".join(reasons)
+        sys.stderr.write(
+            "dictionary mode 'online' is contradictory with " + joined + " "
+            "(would result in exit-2 before network, provider activation, "
+            "Offline install, or PART-B mutation per ADR-0009)"
+        )
+        raise SystemExit(2)
+
+
+def _build_online_factory(
+    *,
+    paths: Any,
+    expected_version: str,
+    expected_bytes: int,
+    expected_sha: str,
+) -> Any:
+    """Build the Online-mode provider factory used by the app.
+
+    The returned callable matches
+    ``Callable[[], tuple[DictionaryProvider, OnlineSessionInfo]]`` and
+    builds a fresh ``OnlineDictionaryProvider`` only on each invocation.
+    The factory NEVER constructs a provider eagerly — its first
+    invocation must wait until the user picks ``Use Online`` in the
+    chooser, so the chooser startup path performs zero Online
+    construction and zero Online transport.
+
+    The Product Online manifest is loaded ONLY from the committed
+    ``release/dictionary-online-manifest-v2.json``. The browser / API
+    caller cannot substitute a different manifest, URL, repository, or
+    host — that surface is intentionally absent from the Product.
+    """
+    from app.dictionary_session import OnlineSessionInfo  # noqa: PLC0415
+    from app.online_manifest import load_manifest  # noqa: PLC0415
+    from app.online_transport import create_product_online_provider  # noqa: PLC0415
+
+    online_manifest_path = (
+        REPO_ROOT / "release" / "dictionary-online-manifest-v2.json"
+    )
+    cache_dir = paths.data_dir / "online-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def factory() -> Any:
+        manifest = load_manifest(online_manifest_path)
+        provider = create_product_online_provider(manifest, cache_dir)
+        info = OnlineSessionInfo(
+            dataset_token=str(manifest.dataset_token),
+            asset_token=str(provider.asset_token),
+            cache_dir=str(cache_dir),
+        )
+        return provider, info
+
+    return factory
+
+
+def _build_offline_install_triple(
+    *, manifest: "DictionaryManifest | None", manifest_path: Path
+) -> Any:
+    """Build the server-owned ``OfflineInstallTriple`` for the API.
+
+    The triple is loaded from the committed trusted Offline manifest and
+    carries the canonical filename, exact byte count, exact SHA-256, and
+    trusted download URL. The browser / API caller cannot override any
+    of those fields.
+    """
+    from app.dictionary_mode import OfflineInstallTriple  # noqa: PLC0415
+
+    if manifest is None:
+        return None
+    return OfflineInstallTriple(
+        version=str(manifest.version),
+        filename=str(manifest.filename),
+        sha256=str(manifest.sha256),
+        bytes=int(manifest.bytes),
+        download_url=str(manifest.download_url) if manifest.download_url else "",
+        manifest_path=manifest_path,
+    )
+
+
+def _decide_mode(args: argparse.Namespace, paths: Any, manifest: Any) -> str:
+    """Run the ADR-0009 precedence and return the effective mode.
+
+    Returns ``"offline"``, ``"online"``, or ``"unconfigured"``. Caller
+    is expected to have already validated CLI conflicts.
+
+    ``--dict-path`` is explicit Offline for this process; the canonical
+    managed-dir asset is irrelevant to the mode decision when the user
+    names a path. ``--dictionary-mode`` is honored directly even when
+    the canonical asset is absent — the resulting in-process startup
+    then surfaces the missing-asset failure in ``build_standalone_app``.
+    """
+    from app.dictionary_mode import decide_startup_mode  # noqa: PLC0415
+
+    if args.dict_path is not None:
+        return "offline"
+
+    if args.dictionary_mode == "online":
+        return "online"
+    if args.dictionary_mode == "offline":
+        return "offline"
+
+    manifest_filename = "dictionary.sqlite"
+    manifest_sha: str | None = None
+    manifest_bytes_val: int | None = None
+    if manifest is not None:
+        manifest_filename = str(manifest.filename)
+        manifest_sha = str(manifest.sha256).lower()
+        manifest_bytes_val = int(manifest.bytes)
+    else:
+        # Default startup without an explicit manifest path: try the
+        # committed release manifest if one exists.
+        mp = REPO_ROOT / "release" / "dictionary-manifest-v2.json"
+        if mp.is_file():
+            try:
+                from app.dict_install import load_manifest  # noqa: PLC0415
+                m = load_manifest(mp)
+                manifest_filename = str(m.filename)
+                manifest_sha = str(m.sha256).lower()
+                manifest_bytes_val = int(m.bytes)
+            except Exception:
+                pass
+    decision = decide_startup_mode(
+        managed_dir=paths.dictionary_dir,
+        explicit_mode=None,
+        manifest_filename=manifest_filename,
+        manifest_sha256=manifest_sha,
+        manifest_bytes=manifest_bytes_val,
+    )
+    return decision.mode
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Ensure the repository-local virtualenv is present before doing
+    # any work — the app code expects to run with the install pins.
+    # Checked BEFORE argparse so ``--help`` also fails closed when the
+    # venv is missing (the user should know they need to install deps
+    # even when they only asked for help).
+    _require_venv()
+
+    # Ensure ``app.*`` imports resolve before argument parsing so
+    # ``--version`` can report the single application-version authority.
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+
+    args = _parse_args(list(argv) if argv is not None else sys.argv[1:])
+
+    if getattr(args, "setup_voice", False):
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+        from app.audio import (  # noqa: PLC0415
+            PIPER_PINNED_VOICE,
+            ensure_piper_voice,
+            find_piper_executable,
+        )
+
+        _log(f"Setting up verified Piper voice ({PIPER_PINNED_VOICE})...")
+        piper_exe = find_piper_executable()
+        if piper_exe is None:
+            sys.stderr.write(
+                "wortlaut: piper executable not found in PATH or .venv.\n"
+                "  Ensure dependencies are installed:\n"
+                "      .venv/bin/pip install -e .\n"
+            )
+            return 1
+        try:
+            model_path = ensure_piper_voice()
+            _log(f"Verified voice model ready at {model_path}")
+            return 0
+        except Exception as e:
+            sys.stderr.write(f"wortlaut: failed to set up Piper voice: {e}\n")
+            return 1
+
+    # ADR-0009 contradictory-CLI checks happen BEFORE any other action
+    # so network, provider activation, install, and PART-B mutation
+    # never start on a contradictory invocation.
+    _reject_online_conflicts(args)
+
+    # Ensure ``app.*`` and ``tools.*`` imports resolve even when the
+    # launcher is invoked from a different working directory.
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+
+    from app.standalone import (  # noqa: PLC0415
+        StandaloneError,
+        ensure_user_db,
+        resolve_standalone_paths,
+    )
+
+    paths = resolve_standalone_paths(
+        data_dir=args.data_dir,
+        dict_path=args.dict_path,
+        user_db_path=args.user_db,
+    )
+
+    manifest_path = (
+        args.manifest
+        if args.manifest is not None
+        else (REPO_ROOT / "release" / "dictionary-manifest-v2.json")
+    )
+
+    # 1. Custom-manifest cases: --manifest ALWAYS means Offline (Developer/
+    #    Recovery). It is rejected when combined with --dictionary-mode online
+    #    above. Without --install-dictionary it just verifies and launches
+    #    Offline. With --install-dictionary the existing pipeline runs.
+    custom_manifest_in_use = args.manifest is not None
+    manifest: DictionaryManifest | None = None
+    if args.dict_path is None:
+        manifest = _load_active_manifest(manifest_path)
+
+    installed_path: Path | None = None
+    if args.install_dictionary:
+        if manifest is None:
+            manifest = _load_active_manifest(manifest_path)
+        installed_path = _maybe_install(
+            True,
+            manifest=manifest,
+            target_dir=paths.dictionary_dir,
+        )
+
+    # Decide the effective session mode BEFORE constructing the app.
+    effective_mode = _decide_mode(args, paths, manifest)
+    if effective_mode == "online":
+        if args.dictionary_mode != "online":
+            _log("chooser: no canonical Offline dictionary; runtime chooser shown")
+            effective_mode = "unconfigured"
+
+    if args.dict_path is None:
+        assert manifest is not None
+        if installed_path is not None and installed_path == paths.dictionary_path:
+            pass
+        else:
+            # Custom-manifest path: Developer/Recovery. Identity mismatch
+            # is a hard failure (exit 2) per ADR-0009 §1 / Slice 12.
+            if custom_manifest_in_use:
+                _verify_canonical_dictionary(
+                    dictionary_path=paths.dictionary_path,
+                    manifest=manifest,
+                )
+            elif effective_mode == "unconfigured":
+                # Slice 12 default fallback: default startup + no valid
+                # canonical offline === chooser state, not a launcher exit.
+                # ``_verify_canonical_dictionary`` would otherwise raise
+                # SystemExit on a missing file.
+                _log(
+                    "default chooser path: skipping canonical identity "
+                    "verification (no offline asset present yet)"
+                )
+            elif effective_mode == "online":
+                # Explicit ``--dictionary-mode online`` (ADR-0009 startup
+                # precedence): the trusted Product Online provider is the
+                # dictionary source for this session, so the full
+                # canonical Offline asset is NOT required. No identity
+                # check, no install, no copy of the Offline asset.
+                _log(
+                    "explicit online: canonical Offline dictionary not "
+                    "required for this session; skipping identity check"
+                )
+            else:
+                _verify_canonical_dictionary(
+                    dictionary_path=paths.dictionary_path,
+                    manifest=manifest,
+                )
+    elif not paths.dictionary_path.is_file():
+        # Explicit --dict-path remains a developer/recovery override and
+        # is validated by DictionaryRuntime during application activation;
+        # an explicit missing path always fails closed.
+        sys.stderr.write(
+            f"dictionary asset is missing: {paths.dictionary_path}\n"
+        )
+        return 1
+
+    ensure_user_db(paths.user_db_path)
+    _log(f"data directory: {paths.data_dir}")
+    _log(f"user database : {paths.user_db_path}")
+    _log(f"dictionary    : {paths.dictionary_path}")
+    _log(f"media cache   : {paths.media_dir}")
+    _log(f"mode          : {effective_mode}")
+
+    # AGENTS R8 / R12: the API is unauthenticated and must remain on
+    # the loopback interface. The host is hard-coded; only the port is
+    # user-configurable.
+    bind_host = "127.0.0.1"
+    url = f"http://{bind_host}:{args.port}"
+    _log(f"  Wortlaut is starting at: {url}")
+
+    from app.deck import DictionaryRuntimeError  # noqa: PLC0415
+
+    offline_triple = _build_offline_install_triple(
+        manifest=manifest,
+        manifest_path=manifest_path,
+    )
+
+    # The Online factory is constructed eagerly ONLY in the Online
+    # startup branch (or in tests / E2E state B). In all other startup
+    # branches, the factory is the bound provider-build callback used
+    # by ``POST /vocab/settings/dictionary/use-online`` to construct the
+    # Online provider on demand — never eagerly.
+    if effective_mode == "online":
+        from app.api import create_app as _create_app  # noqa: PLC0415
+
+        online_factory = _build_online_factory(
+            paths=paths,
+            expected_version=str(manifest.version if manifest is not None else "v2"),
+            expected_bytes=int(manifest.bytes) if manifest is not None else 0,
+            expected_sha=str(manifest.sha256) if manifest is not None else "",
+        )
+        # Explicit Online startup: the provider is constructed NOW from
+        # the committed trusted Online manifest and bound into the app,
+        # so the process starts in mode ``online`` without a preceding
+        # ``/use-online`` round trip. The factory is retained on
+        # ``app.state`` for normal session switching; no Offline asset
+        # is installed, copied, or downloaded.
+        try:
+            online_provider, online_info = online_factory()
+        except Exception as exc:  # noqa: BLE001
+            sys.stderr.write(f"online provider construction failed: {exc}\n")
+            return 2
+        try:
+            app = _create_app(
+                dict_path=None,
+                user_db_path=paths.user_db_path,
+                cors_origins=(
+                    f"http://{bind_host}:{args.port}",
+                    f"http://localhost:{args.port}",
+                ),
+                service_port=args.port,
+                expected_dictionary_sha256=(
+                    str(manifest.sha256) if manifest is not None else None
+                ),
+                expected_dictionary_version=(
+                    str(manifest.version) if manifest is not None else "v2"
+                ),
+                expected_dictionary_bytes=(
+                    int(manifest.bytes) if manifest is not None else None
+                ),
+                runtime=None,
+                managed_dictionary_dir=paths.dictionary_dir,
+                manifest_filename=str(
+                    manifest.filename if manifest is not None else "dictionary.sqlite"
+                ),
+                offline_install_triple=offline_triple,
+                online_provider=online_provider,
+                online_session_info=online_info,
+                online_provider_factory=online_factory,
+            )
+        except (DictionaryRuntimeError, StandaloneError) as exc:
+            sys.stderr.write(f"online dictionary activation failed: {exc}\n")
+            return 2
+    elif effective_mode == "unconfigured":
+        # Slice 12 default chooser state. No dictionary provider is
+        # constructed at startup; the chooser is shown and the user
+        # picks Online (factory builds provider on demand) or
+        # Download for Offline use.
+        from app.api import create_app as _create_app  # noqa: PLC0415
+
+        online_factory = _build_online_factory(
+            paths=paths,
+            expected_version=str(manifest.version if manifest is not None else "v2"),
+            expected_bytes=int(manifest.bytes) if manifest is not None else 0,
+            expected_sha=str(manifest.sha256) if manifest is not None else "",
+        )
+        app = _create_app(
+            dict_path=None,
+            user_db_path=paths.user_db_path,
+            cors_origins=(
+                f"http://{bind_host}:{args.port}",
+                f"http://localhost:{args.port}",
+            ),
+            service_port=args.port,
+            expected_dictionary_sha256=(
+                str(manifest.sha256) if manifest is not None else None
+            ),
+            expected_dictionary_version=(
+                str(manifest.version) if manifest is not None else "v2"
+            ),
+            expected_dictionary_bytes=(
+                int(manifest.bytes) if manifest is not None else None
+            ),
+            runtime=None,
+            managed_dictionary_dir=paths.dictionary_dir,
+            manifest_filename=str(
+                manifest.filename if manifest is not None else "dictionary.sqlite"
+            ),
+            offline_install_triple=offline_triple,
+            online_provider_factory=online_factory,
+        )
+        _log(
+            "chooser: app started without a dictionary; user must choose a mode"
+        )
+    else:
+        try:
+            from app.api import create_app  # noqa: PLC0415
+            from app.deck import DictionaryRuntime  # noqa: PLC0415
+
+            runtime = DictionaryRuntime(
+                paths.dictionary_path,
+                paths.user_db_path,
+                expected_sha256=(
+                    manifest.sha256.lower() if manifest is not None else None
+                ),
+                expected_version=(
+                    manifest.version if manifest is not None else "v2"
+                ),
+            )
+            online_factory = _build_online_factory(
+                paths=paths,
+                expected_version=str(manifest.version if manifest is not None else "v2"),
+                expected_bytes=int(manifest.bytes) if manifest is not None else 0,
+                expected_sha=str(manifest.sha256) if manifest is not None else "",
+            )
+            app = create_app(
+                dict_path=None,
+                user_db_path=paths.user_db_path,
+                cors_origins=(
+                    f"http://{bind_host}:{args.port}",
+                    f"http://localhost:{args.port}",
+                ),
+                service_port=args.port,
+                expected_dictionary_sha256=(
+                    str(manifest.sha256) if manifest is not None else None
+                ),
+                expected_dictionary_version=(
+                    str(manifest.version) if manifest is not None else "v2"
+                ),
+                expected_dictionary_bytes=(
+                    int(manifest.bytes) if manifest is not None else None
+                ),
+                runtime=runtime,
+                managed_dictionary_dir=paths.dictionary_dir,
+                manifest_filename=str(
+                    manifest.filename if manifest is not None else "dictionary.sqlite"
+                ),
+                offline_install_triple=offline_triple,
+                online_provider_factory=online_factory,
+            )
+        except (DictionaryRuntimeError, StandaloneError) as exc:
+            sys.stderr.write(f"dictionary activation failed: {exc}\n")
+            return 2
+
+    if not args.no_browser:
+        try:
+            webbrowser.open(url)
+        except Exception:  # pragma: no cover - defensive only
+            pass
+
+    import uvicorn  # noqa: PLC0415
+
+    uvicorn.run(app, host=bind_host, port=args.port, log_level="info")
+    return 0
+
+
+if __name__ == "__main__":
+    # When the launcher is invoked directly (typical user case: the
+    # shebang resolves to /usr/bin/env python3 on PATH) and a repo
+    # venv is present, re-exec into the venv interpreter so the rest
+    # of ``main`` always sees the installed dependency pins.
+    _reexec_into_venv()
+    raise SystemExit(main())

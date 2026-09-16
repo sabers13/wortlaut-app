@@ -1,0 +1,9 @@
+{"word": "Haus", "pos": "noun", "lang_code": "de", "tags": ["neuter"], "sounds": [{"ipa": "/haʊ̯s/"}], "senses": [{"glosses": ["Wohngebäude"]}], "forms": [{"form": "Hause", "tags": ["dative", "singular"]}]}
+{"word": "See", "pos": "noun", "lang_code": "de", "tags": ["masculine"], "senses": [{"glosses": ["Binnengewässer"]}], "forms": [{"form": "Sees", "tags": ["genitive", "singular"]}]}
+{"word": "See", "pos": "noun", "lang_code": "de", "tags": ["feminine"], "senses": [{"glosses": ["Meer"]}], "forms": []}
+{"word": "anrufen", "pos": "verb", "lang_code": "de", "senses": [{"glosses": ["telefonieren mit"]}], "forms": [{"form": "ruft an", "tags": ["present", "third-person", "singular"]}, {"form": "rief an", "tags": ["past", "third-person", "singular"]}]}
+{"word": "schnell", "pos": "adj", "lang_code": "de", "senses": [{"glosses": ["rasch"]}], "forms": []}
+{"word": "Berlin", "pos": "proper_noun", "lang_code": "de", "tags": ["neuter"], "senses": [{"glosses": ["Hauptstadt von Deutschland"]}], "forms": []}
+{"word": "mit", "pos": "prep", "lang_code": "de", "senses": [{"glosses": ["zusammen mit"]}], "forms": []}
+{"word": "Milch", "pos": "noun", "lang_code": "de", "tags": ["feminine"], "senses": [{"glosses": ["Milch"]}], "forms": []}
+{"word": "maison", "pos": "noun", "lang_code": "fr"}
