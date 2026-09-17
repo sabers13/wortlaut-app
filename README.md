@@ -1,354 +1,257 @@
 # Wortlaut
 
-Wortlaut is a standalone, offline-first German flashcard application
-(version 0.1.0). Your cards, reviews, meanings, and audio live only on
-your machine.
+[![CI](https://github.com/sabers13/wortlaut-app/actions/workflows/ci.yml/badge.svg)](https://github.com/sabers13/wortlaut-app/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/code-MIT-green.svg)](LICENSE)
+[![Dictionary: CC BY-SA / CC BY](https://img.shields.io/badge/dictionary-CC%20BY--SA%20%2F%20CC%20BY-lightgrey.svg)](release/ATTRIBUTION-v2.md)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
-Wortlaut is a single-user learning tool. You create decks, capture or
-import vocabulary, study on a confidence-based review schedule, and
-back up your own data. The dictionary is a read-only distributable
-asset; your cards, reviews, and audio are private data you fully own.
+**An offline-first German flashcard app with its own dictionary, spaced-repetition review, and pronunciation audio.**
 
-Wortlaut works in two dictionary modes. Offline mode uses the full
-local dictionary asset. Online mode fetches verified read-only
-dictionary shards from the trusted dictionary distribution instead.
-In both modes your user database, learning history, meanings, and
-custom audio stay local: no study data is uploaded, and there is no
-telemetry, no analytics, and no runtime AI.
+Wortlaut runs on your machine. Your decks, reviews, meanings, and recordings stay in a local SQLite database, and the German dictionary is a separate, verified, read-only asset built from Wiktionary and Tatoeba.
+
+> **Core principle: the dictionary is disposable; your learning history is not.**
+
+> [!NOTE]
+> **Version 0.1.0.** A single-user, local application for Linux and macOS. It is not a hosted or multi-user service. There is no runtime AI, no telemetry, and no analytics.
 
 ---
 
-## What you get
+## What it does
 
-* A complete browser-based flashcard product: navigation, manual
-  vocabulary entry, CSV import, two-stage capture, review with FSRS
-  scheduling, DE/EN learner meanings, Anki (TSV + APKG) export.
-* A read-only German dictionary asset covering ~100k indexed lemmas
-  and ~777k Tatoeba example sentences.
-* A standalone launcher that resolves per-user data paths and brings
-  the app up at <http://127.0.0.1:8000>.
-* Strict local-only operation. The service binds to the loopback
-  interface only; no LAN exposure, no telemetry, and no user-data
-  upload. Network use is limited to downloading verified dictionary
-  release assets and, in Online mode, fetching read-only dictionary
-  shards from the trusted dictionary distribution.
+| Feature | What you get |
+| --- | --- |
+| **Look up and add words** | Search the dictionary, pick the exact sense, and choose German, English, or both meanings |
+| **Capture from a sentence** | Paste a sentence, select a word or phrase, and create cards that remember the sentence and a lesson label |
+| **Import** | Paste vocabulary lines or load a CSV/text file into a deck |
+| **Study** | FSRS scheduling with a 1–5 confidence rating, compact answers, and optional extra grammar and examples |
+| **Pronunciation** | Play automatic audio, or record or upload your own pronunciation for any card |
+| **Organise** | Decks, folders, moving cards between decks, and changing a card's dictionary sense without losing its history |
+| **Export** | Anki `.apkg` (with your audio and meanings) or tab-separated TSV |
 
-## Prerequisites
+---
 
-* Linux or macOS with Python 3.11 or newer.
-* `libespeak-ng1` library for native Piper German pronunciation (on Debian/Ubuntu: `sudo apt install libespeak-ng1`).
-* The Python packages declared in `pyproject.toml` (you install them
-  yourself; the launcher does not auto-install, see "Install" below).
-* `git` if you are installing from a clone.
-* A modern browser (any current Chromium, Firefox, or Safari).
-* **No Node.js is required.** The browser product's production assets
-  ship with the repository (under `app/frontend/`); the launcher
-  serves them directly. You never need to run `npm`, Vite, or any
-  JavaScript toolchain yourself.
+## How it works
 
-## Install
+```mermaid
+flowchart LR
+    B[Browser UI<br/>Lit + TypeScript] <--> S[FastAPI server<br/>127.0.0.1 only]
+    S <--> U[(Your data<br/>flashcards.sqlite + media)]
+    S --> P{Dictionary mode}
+    P -- offline --> D[(Full dictionary asset<br/>verified SHA-256)]
+    P -- online --> O[Verified read-only shards<br/>GitHub Releases]
+    S --> A[Audio<br/>custom recording or local Piper TTS]
+```
+
+- The **FastAPI backend** owns persistence, scheduling, and dictionary access. It serves a prebuilt frontend, so running the app needs no Node.js.
+- **Your data** (decks, notes, cards, review history, meanings, recordings) and the **dictionary** never share a file or a lifecycle. Replacing the dictionary never touches your cards; deleting cards never touches the dictionary.
+- In **Offline mode** dictionary lookups stay on your machine. **Online mode** fetches integrity-checked shards on demand instead of installing the full asset.
+
+---
+
+## The dictionary
+
+The dictionary is produced by this project's build pipeline from **German and English Wiktionary** (via Kaikki/Wiktextract dumps) and **Tatoeba** example sentences, then released as a checksummed asset.
+
+| Released dictionary v2 | |
+| --- | --- |
+| File size | 945,418,240 bytes (~945 MB) |
+| Example sentences (Tatoeba, DE/EN) | 777,295 |
+| Lemmas linked to example sentences | 99,537 |
+| Lemma entries in total | 1,118,636 |
+| Senses | 480,221 |
+| Sense meanings | 577,191 |
+| Online distribution | 577 SHA-256-verified shards |
+
+Provenance is stored on lemma, sense, meaning, and example content through `source` and `license` metadata. The asset also contains 48 meaning rows generated by an LLM **at build time**, each marked `llm_generated_v1` and linked to the source meanings it was derived from. Nothing is generated while you use the app. Full provenance and licensing are in [`release/ATTRIBUTION-v2.md`](release/ATTRIBUTION-v2.md).
+
+---
+
+## Key design decisions
+
+### Durable semantic identity
+
+SQLite row IDs are local to one dictionary build. Wortlaut identifies lemmas and senses by content-derived semantic references that survive rebuilds. Each note owns one duplicate-safe identity key enforced by a partial `UNIQUE` index, so capturing the same word twice reuses the existing card. When a newer dictionary is installed, bindings are relinked and the active version is swapped atomically; cards, meanings, and review history are preserved.
+
+### Stale-safe writes
+
+Every lookup returns a dictionary token. A write carrying a token from a different dictionary generation is rejected, so a card can never be bound against a dictionary it was not picked from.
+
+### History is never deleted by accident
+
+Deleting a deck never cascades into notes with review history. Their memberships are removed and the notes move to a protected **Orphaned** deck, from which they can be restored with identity, scheduling, and history intact.
+
+### Replayable review model
+
+The `review_log` is append-only and stores both your raw 1–5 confidence and the mapped FSRS rating, so the confidence mapping can be revised later by replaying history.
+
+### Verified dictionary, two stages
+
+On every launch, the dictionary's filename, byte size, and streaming SHA-256 are checked before any user data is touched. Full validation (`PRAGMA quick_check` plus schema validation) runs at install time and at runtime activation, against an immutable private snapshot whose hash must match the manifest.
+
+---
+
+## Requirements
+
+- Linux or macOS with **Python 3.11+**
+- `libespeak-ng1` for native Piper pronunciation (Debian/Ubuntu: `sudo apt install libespeak-ng1`)
+- `git`, and a current Chromium, Firefox, or Safari
+- Disk space for the ~945 MB dictionary if you use Offline mode
+
+## Installation
 
 ```bash
-# 1. Get the source
 git clone https://github.com/sabers13/wortlaut-app.git wortlaut
 cd wortlaut
 
-# 2. (Debian/Ubuntu) Install TTS audio system library
+# Native pronunciation library (Debian/Ubuntu)
 sudo apt install libespeak-ng1
 
-# 3. Install Python dependencies into a local virtual environment
+# Python dependencies in a repository-local virtual environment
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install -e .
 
-# 4. Download and verify the v2 dictionary release asset.
+# Download and verify the dictionary (once)
 ./wortlaut --install-dictionary
 
-# 5. Download and verify native German voice model (Thorsten high)
+# Download and verify the German voice model (once)
 ./wortlaut setup-voice
 
-# 6. Launch
+# Launch
 ./wortlaut
 ```
 
-You only need to install the dictionary once. Subsequent launches
-reuse the verified dictionary already on disk.
+`./wortlaut` re-executes itself through `.venv/bin/python`, so you don't need to activate the environment. The editable install also provides a `wortlaut` console command (`.venv/bin/wortlaut`). `./flashcard`, the product's former name, remains as a compatibility alias.
 
-`./wortlaut` automatically re-executes itself through the
-repository-local `.venv/bin/python` interpreter, so you do not have to
-`source .venv/bin/activate` first. `./flashcard` (the product's former
-name) still works as a compatibility alias — it re-execs `./wortlaut`
-with the same arguments — but new scripts and documentation should use
-`./wortlaut`.
+## Quick start
 
-Installing the package also provides a `wortlaut` console command, so
-after the editable install above you can use either form without
-activating the virtual environment:
+On first launch, Wortlaut prints its data directory, creates your database from [`reference/schema.sql`](reference/schema.sql), and opens <http://127.0.0.1:8000>.
 
-```bash
-./wortlaut --version
-# wortlaut 0.1.0
+1. Create a deck.
+2. Add words by lookup, by **Capture from a sentence**, or by importing a CSV/text file.
+3. Start studying. Each card first shows the headword, part of speech, and IPA.
+4. Press **Space** to reveal the answer, **R** to play the pronunciation, and **1–5** to rate how well you knew it:
 
-.venv/bin/wortlaut --version
-# wortlaut 0.1.0
+| Key | Rating |
+| :---: | --- |
+| 1 | Not at all |
+| 2 | Barely |
+| 3 | With effort |
+| 4 | Comfortably |
+| 5 | Without doubt |
 
-.venv/bin/wortlaut --no-browser
-```
+Full grammar, more examples, meaning editing, and custom pronunciation live behind **Show extra info**. Tick **Always show extra info** to open it automatically; that preference is stored in your browser only.
 
-## First launch
+### Options
 
-The first time you start Wortlaut:
+| Flag | Purpose |
+| --- | --- |
+| `--port N` | Port on `127.0.0.1` (default `8000`) |
+| `--no-browser` | Start the server without opening a browser |
+| `--dictionary-mode offline\|online` | Choose the dictionary source for this session |
+| `--data-dir PATH` | Override the per-user data directory |
+| `--install-dictionary` | Download and verify the dictionary into the default slot |
+| `setup-voice` / `--setup-voice` | Download and verify the Piper voice model, then exit |
+| `--version` | Print the version without touching data |
 
-1. The launcher prints the resolved per-user data directory, for
-   example `~/.local/share/flashcard/`.
-2. It creates your private SQLite database (`flashcards.sqlite`) there
-   from the authoritative `reference/schema.sql`.
-3. It opens <http://127.0.0.1:8000> in your browser.
+`--dict-path`, `--user-db`, and `--manifest` are developer and recovery overrides; see `./wortlaut --help`.
 
-You will land on the empty deck screen. Create a deck, add a card,
-review it, repeat.
+---
 
-## Studying a card
+## Where your data lives
 
-Each due card first shows only its headword, part of speech, and IPA:
+| What | Location |
+| --- | --- |
+| User data directory | `$XDG_DATA_HOME/flashcard/` (default `~/.local/share/flashcard/`) |
+| Cards, reviews, meanings | `flashcards.sqlite` in that directory |
+| Custom pronunciation | `media/` in that directory |
+| Audio cache | `cache/` in that directory |
+| Dictionary asset | `dictionary/dictionary.sqlite` in that directory |
+| Piper voice model | `$XDG_DATA_HOME/wortlaut/piper/` (default `~/.local/share/wortlaut/piper/`) |
 
-```
-das Haus
-NOUN · /haʊ̯s/
+The data directory keeps the product's former name, `flashcard`, for compatibility with existing installs.
 
-[ Reveal answer ]
-```
-
-Press **Space** or click **Reveal answer** to see the answer. The
-revealed answer stays deliberately compact — the primary German (and,
-where available, English) learner meaning, one primary example
-sentence, and a **Play pronunciation** button (replay it any time with
-**R**) — followed by your **1–5** confidence rating for how well you
-knew it.
-
-Everything else — full grammar (including noun plural/genitive),
-additional examples, personal meaning editing, and custom-pronunciation
-recording/management — lives behind a **Show extra info** button so it
-never clutters the default review path. Click it (or **Hide extra
-info** to collapse it again) whenever you want the detail.
-
-If you always want that detail visible, check **Always show extra
-info** on any revealed card. From then on, Extra info opens
-automatically as soon as you reveal a card — turn the checkbox off to
-go back to reviewing compactly. This is a local browser preference
-(stored under one `localStorage` key in your browser, never in the
-user database or on the server), so it is per-browser and persists
-across restarts, but is not part of your synced study data.
-
-## Where data lives
-
-| Concern                | Location                                                    |
-| ---------------------- | ----------------------------------------------------------- |
-| User data directory    | `$XDG_DATA_HOME/flashcard/` (defaults to `~/.local/share/flashcard/`) |
-| Your cards / reviews   | `flashcards.sqlite` inside that directory                   |
-| Custom pronunciation   | `media/` inside that directory                              |
-| Audio cache            | `cache/` inside that directory                              |
-| Dictionary asset       | `dictionary/dictionary.sqlite` inside that directory        |
-| Piper voice model      | `$XDG_DATA_HOME/wortlaut/piper/` (defaults to `~/.local/share/wortlaut/piper/`) |
-
-The dictionary file is a read-only distributable asset. Your private
-files are independent — replacing the dictionary never touches your
-cards, and removing your cards never affects the dictionary.
-
-## Backup
-
-The only user data you own is in `$XDG_DATA_HOME/flashcard/`.
-To back up, copy that directory. To restore, copy it back. There is
-no other database, no remote storage, no cloud.
-
-If you want to move your cards to Anki, use the **Export APKG** and
-**Export Anki TSV** buttons inside the app. They produce a single
-self-contained file you can import into Anki.
-
-## Dictionary verification
-
-Dictionary verification happens in two deliberately separate stages so the
-~945 MB asset is never validated twice on the same startup:
-
-1. **Release identity precheck** (every ordinary canonical launch, before
-   any user data is touched): exact manifest filename, exact byte size,
-   streaming SHA-256. No SQLite is opened at this stage.
-2. **Full validation**: `PRAGMA quick_check` plus the full PART-A schema
-   validation reused from the live app. The live runtime validates an immutable
-   private snapshot and requires its SHA-256 to equal the selected manifest, so
-   replacing the canonical pathname after the precheck cannot change the active
-   dictionary. This runs once per install
-   (`--install-dictionary`, or when placing a file manually and letting the
-   installer verify it) and once more at runtime activation
-   (`DictionaryRuntime`), which is the authoritative integrity/schema gate
-   for whichever dictionary file is actually opened.
-
-Any failure aborts the install, deletes the partial file, and never
-overwrites a valid dictionary. The dictionary URL is in the manifest
-and can be updated without code changes; the same installer works
-against any host (GitHub Release, public artifact mirror, local
-`file://` URL).
-
-## Offline and Online dictionary modes
-
-Wortlaut selects its dictionary source per session:
-
-* **Offline mode** uses the full local dictionary asset installed by
-  `--install-dictionary`. No dictionary traffic leaves your machine.
-* **Online mode** fetches verified read-only dictionary shards from the
-  trusted dictionary distribution when you look words up. Shard content
-  is integrity-checked before use.
-
-The choice is session-scoped: start with `--dictionary-mode offline`
-or `--dictionary-mode online`, or pick a mode in the app when no local
-dictionary is installed yet. Dictionary installation itself always
-downloads release assets from the distribution. Neither mode uploads
-your cards, reviews, meanings, or audio.
-
-## Dictionary installation status
-
-Install the dictionary with:
-
-```bash
-./wortlaut --install-dictionary
-```
-
-The installer downloads the release asset and verifies its pinned SHA-256 and
-byte count before installing it as `dictionary.sqlite`. The canonical installed
-filename does not change between manifest versions — the manifest's `sha256` is
-the durable identity. `--dict-path` is an advanced developer/recovery override;
-it still undergoes PART-A validation, but deliberately does not assert the
-active release identity.
+**Backup:** copy the user data directory. **Restore:** copy it back. To move cards to Anki, use **Export APKG** or **Export Anki TSV** in any deck.
 
 ## Updating the dictionary
 
-The launcher does not silently upgrade. To install a newer
-dictionary release:
-
-1. Place the new `dictionary-manifest-vN.json` (and matching attribution /
-   `LICENSE`) in `release/`.
-2. Run `./wortlaut --manifest release/dictionary-manifest-vN.json
-   --install-dictionary --data-dir <your data dir>`.
-
-The installer refuses to overwrite a still-valid dictionary; remove
-the old `dictionary.sqlite` first if you want a forced reinstall.
-On the next normal startup, Wortlaut relinks semantic-reference-backed note
-bindings and atomically replaces the active dictionary metadata; cards, review
-history, and user-authored meanings are preserved.
-
-## Docker data mounts
-
-The container keeps the disposable dictionary and persistent user state in
-separate mounts. Mount the dictionary read-only at `/dictionary` and user data
-read-write at `/data`; do not mount both onto one host directory. The service
-still listens only on `127.0.0.1:8000` inside its runtime configuration.
-
-## Stopping and restarting
-
-* **Stop**: `Ctrl+C` in the terminal where the launcher is running.
-  The FastAPI server shuts down cleanly.
-* **Restart**: `./wortlaut` again. Your state is preserved.
-* **Run in the background**: `./wortlaut --no-browser` keeps the
-  server up without opening a browser window. Combine with a
-  process supervisor of your choice if you want a daemon.
-
-## Custom port
-
-To bind the API to a non-default port:
+The launcher never upgrades silently. To install a newer release, place its manifest (with matching attribution and license) in `release/` and run:
 
 ```bash
-./wortlaut --port 8123
+./wortlaut --manifest release/dictionary-manifest-vN.json --install-dictionary --data-dir <your data dir>
 ```
 
-The launcher then binds `127.0.0.1:8123`, opens
-`http://127.0.0.1:8123`, and the browser security middleware accepts
-`http://127.0.0.1:8123` (and `http://localhost:8123`) as the same
-origin. Non-loopback hosts and arbitrary origins remain rejected.
+The installer refuses to overwrite a still-valid dictionary; remove the old `dictionary.sqlite` first to force a reinstall. On the next start, note bindings are relinked and the active dictionary is swapped atomically.
 
-## Export to Anki
+## Docker
 
-From any deck, click **Export APKG** (preferred) or **Export Anki
-TSV**. The export contains:
+The container keeps the dictionary and user state in separate mounts: mount the dictionary **read-only** at `/dictionary` and user data **read-write** at `/data`, never onto one host directory. The service still listens only on `127.0.0.1:8000` inside its runtime configuration.
 
-* the German vocabulary front and back (with grammar, IPA, and
-  examples) for every card in the deck;
-* your custom pronunciation audio, attached to the right notes;
-* your user-authored DE/EN meanings.
+---
 
-The export is a real `.apkg` you can drag into Anki; the TSV is the
-tab-separated fallback for any tool that prefers plain text. Both
-sanitise German commas and embedded newlines (the app never emits
-a literal newline inside an Anki field).
+## Privacy and network use
 
-## Privacy and local-only behavior
-
-Wortlaut is a local, single-user application — not an internet-facing
-multi-user service:
-
-* The server binds to `127.0.0.1` only — never to a LAN interface.
-  The bind address is not user-configurable.
-* The browser-facing API enforces a loopback `Host` check and an
-  exact-origin allowlist. No LAN or DNS-rebinding host can reach the
-  deck API, and every browser-issued state-changing request carries a
-  dedicated request header that arbitrary web pages cannot forge
-  without triggering a CORS preflight.
-* Your user database, learning history, meanings, and custom audio
-  stay on your machine. Dictionary installation downloads release
-  assets, and Online mode fetches verified read-only dictionary
-  shards — but no user study data is ever uploaded.
-* The active dictionary is immutable and identity-verified (pinned
-  SHA-256 and byte count); replacing it never touches your cards.
-* No runtime AI: no LLM SDK is installed, and there is no telemetry,
-  no analytics, and no error reporting.
-* No credentials, API keys, or tokens are stored anywhere.
+- The server binds to `127.0.0.1` only; the bind address is not configurable.
+- Every request must use a loopback `Host`, any `Origin` must exactly match the allowlist, every state-changing request needs a dedicated request header, and JSON endpoints require a JSON content type. This blocks LAN access, DNS rebinding, and cross-site request forgery.
+- Your cards, reviews, meanings, and recordings are never uploaded. No credentials, API keys, or tokens are stored.
+- Network access happens only when you:
+  - install the dictionary (GitHub Releases);
+  - use Online mode, which fetches verified read-only shards (GitHub Releases);
+  - run `setup-voice`, which downloads the pinned, checksum-verified Piper voice model from Hugging Face.
 
 ## Troubleshooting
 
-| Symptom                                  | Likely cause / fix                                          |
-| ---------------------------------------- | ----------------------------------------------------------- |
-| "repository virtualenv is missing"       | Run `python3 -m venv .venv && .venv/bin/pip install -e .` once. |
-| "dictionary asset is missing"            | Run `./wortlaut --install-dictionary`, or place a verified `dictionary.sqlite` at the default slot. |
-| "dictionary verification failed"        | The canonical file under `dictionary/` does not match the active v2 manifest. Remove the file and re-install it. |
-| "no verified dictionary and the manifest has no download_url" | The selected manifest has no download URL. Use the v2 manifest or place a verified `dictionary.sqlite` manually at the default slot. |
-| Browser does not open                    | Use `--no-browser` and visit <http://127.0.0.1:8000> yourself. |
-| Port 8000 already in use                 | Pass `--port 8001` (and update your browser bookmark). The same-origin Origin header is accepted at the new port automatically. |
-| `spacy` model not installed              | Reinstall project dependencies with `.venv/bin/pip install -e .`. |
-| Native pronunciation not working         | Install `libespeak-ng1` (`sudo apt install libespeak-ng1`) and run `./wortlaut setup-voice`. |
-| Stale deck state after a long offline    | Your data lives in `~/.local/share/flashcard/flashcards.sqlite`; back it up before any manual surgery. |
+| Symptom | Fix |
+| --- | --- |
+| "repository virtualenv is missing" | Run `python3 -m venv .venv && .venv/bin/pip install -e .` once |
+| "dictionary asset is missing" | Run `./wortlaut --install-dictionary`, or place a verified `dictionary.sqlite` in the default slot |
+| "dictionary verification failed" | The file doesn't match the active manifest; remove it and reinstall |
+| "no verified dictionary and the manifest has no download_url" | Use the v2 manifest, or place a verified `dictionary.sqlite` manually |
+| Browser does not open | Use `--no-browser` and open <http://127.0.0.1:8000> yourself |
+| Port 8000 already in use | Pass `--port 8001`; the new origin is accepted automatically |
+| `spacy` model not installed | Reinstall dependencies with `.venv/bin/pip install -e .` |
+| No native pronunciation | Install `libespeak-ng1` and run `./wortlaut setup-voice` |
 
-## Development and verification
+---
 
-To verify a source checkout, run the authoritative validation:
+## Development
 
 ```bash
+.venv/bin/pip install -e ".[dev]"
 make gate
 ```
 
-This runs linting (ruff), strict type checking (mypy), the full
-Python test suite (pytest), and the repository's executable
-consistency checks.
+`make gate` runs Ruff, strict mypy, the backend pytest suite, and the repository's machine-checked consistency rules (module ownership and project invariants).
 
-Frontend checks run from `frontend/`:
+Frontend checks (requires Node.js 22):
 
 ```bash
 cd frontend
+npm ci
 npm test
 npm run typecheck
 npm run build
-npm run test:e2e
+npm run test:e2e   # Playwright browser suite; starts real servers
 ```
 
-The browser end-to-end suite (`npm run test:e2e`, Playwright) is
-heavier: it starts real servers and drives Chromium, so run it
-separately rather than on every edit.
+GitHub Actions runs the backend gate and the frontend unit tests, typecheck, and build on every push and pull request. The heavier Playwright suite runs on manual dispatch.
 
-For the system design, see [`docs/architecture.md`](docs/architecture.md).
-The authoritative database schema lives in `reference/schema.sql`.
+### Repository layout
 
-## Licensing
+```text
+app/          FastAPI backend, dictionary providers, audio, export, prebuilt frontend
+frontend/     Lit + TypeScript source, unit tests, Playwright E2E specs
+tools/        dictionary build pipeline, online shard tooling, consistency checks
+reference/    authoritative user database schema
+release/      dictionary manifests, attribution, and licensing
+tests/        backend test suite
+docs/         architecture
+```
 
-The Wortlaut application source code is licensed under the [MIT License](LICENSE).
-The dictionary and source-data content are not relicensed under MIT: their
-licensing and attribution are governed separately by
-[`release/ATTRIBUTION-v2.md`](release/ATTRIBUTION-v2.md) and the per-row
-`source`/`license` metadata in the dictionary.
+See [`docs/architecture.md`](docs/architecture.md) for the system design.
+
+---
+
+## License
+
+The application source code is [MIT](LICENSE). Dictionary and source-data content are **not** relicensed under MIT; their licensing and attribution are governed by [`release/ATTRIBUTION-v2.md`](release/ATTRIBUTION-v2.md) and the per-row `source` and `license` fields in the dictionary.
